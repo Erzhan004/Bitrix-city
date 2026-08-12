@@ -74,15 +74,14 @@ final class DealService
 
       $result = $this->bitrix->call('crm.item.list', [
         'entityTypeId' => $entityTypeId,
-        'useOriginalUfNames' => 'Y',
         'filter' => $filter,
         'select' => $select,
         'order' => ['id' => 'DESC'],
       ]);
 
-      $items = $result['items'] ?? $result;
+      $items = $this->extractListItems($result);
 
-      if (!is_array($items)) {
+      if ($items === []) {
         continue;
       }
 
@@ -92,9 +91,19 @@ final class DealService
         continue;
       }
 
-      $dealIds = array_map(static fn(array $deal): int => (int) $deal['id'], $activeDeals);
+      $dealIds = $this->extractDealIds($activeDeals);
+
+      if ($dealIds === []) {
+        continue;
+      }
 
       if (count($dealIds) === 1) {
+        $this->logger->info('Deal found', [
+          'deal_id' => $dealIds[0],
+          'flow' => $flowName,
+          'contact_id' => $contactId,
+        ]);
+
         return DealMatch::single($dealIds[0], (string) $flowName);
       }
 
@@ -131,6 +140,56 @@ final class DealService
     ]);
   }
 
+  /** @param array<string, mixed> $result */
+  private function extractListItems(array $result): array
+  {
+    $items = $result['items'] ?? [];
+
+    if (!is_array($items)) {
+      return [];
+    }
+
+    $normalized = [];
+
+    foreach ($items as $item) {
+      if (!is_array($item) || $this->extractItemId($item) === null) {
+        continue;
+      }
+
+      $normalized[] = $item;
+    }
+
+    return $normalized;
+  }
+
+  /** @param list<array<string, mixed>> $items */
+  private function extractDealIds(array $items): array
+  {
+    $ids = [];
+
+    foreach ($items as $item) {
+      $id = $this->extractItemId($item);
+
+      if ($id !== null && $id > 0) {
+        $ids[] = $id;
+      }
+    }
+
+    return array_values(array_unique($ids));
+  }
+
+  /** @param array<string, mixed> $item */
+  private function extractItemId(array $item): ?int
+  {
+    foreach (['id', 'ID', 'Id'] as $key) {
+      if (isset($item[$key]) && (int) $item[$key] > 0) {
+        return (int) $item[$key];
+      }
+    }
+
+    return null;
+  }
+
   /** @param list<array<string, mixed>> $items */
   private function filterActiveDeals(array $items): array
   {
@@ -144,7 +203,7 @@ final class DealService
     $active = [];
 
     foreach ($items as $item) {
-      if (!is_array($item)) {
+      if (!is_array($item) || $this->extractItemId($item) === null) {
         continue;
       }
 
