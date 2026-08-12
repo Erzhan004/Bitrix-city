@@ -90,9 +90,29 @@ final class Config
   /** @param array<string, mixed> $flow */
   private function validateFlow(string $name, array $flow): void
   {
-    $required = ['waiting_field', 'target_field', 'after_stage', 'waiting_yes', 'waiting_no'];
+    $mode = (string) ($flow['waiting_mode'] ?? 'field');
 
-    foreach ($required as $field) {
+    if (!in_array($mode, ['field', 'stage'], true)) {
+      throw new RuntimeException(sprintf('Flow "%s" has invalid waiting_mode "%s".', $name, $mode));
+    }
+
+    if (!isset($flow['target_field']) || $flow['target_field'] === '') {
+      throw new RuntimeException(sprintf('Flow "%s" is missing "target_field".', $name));
+    }
+
+    if (!isset($flow['after_stage']) || $flow['after_stage'] === '') {
+      throw new RuntimeException(sprintf('Flow "%s" is missing "after_stage".', $name));
+    }
+
+    if ($mode === 'stage') {
+      if (!isset($flow['waiting_stage']) || $flow['waiting_stage'] === '') {
+        throw new RuntimeException(sprintf('Flow "%s" is missing "waiting_stage".', $name));
+      }
+
+      return;
+    }
+
+    foreach (['waiting_field', 'waiting_yes', 'waiting_no'] as $field) {
       if (!isset($flow[$field]) || $flow[$field] === '') {
         throw new RuntimeException(sprintf('Flow "%s" is missing "%s".', $name, $field));
       }

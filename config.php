@@ -54,8 +54,11 @@ return [
   ],
 
   /**
-   * Extensible flows: each flow maps "waiting field = yes" → save text → update deal.
-   * Add new scenarios (IIN, address, etc.) by copying the city block.
+   * Extensible flows.
+   *
+   * waiting_mode:
+   *   'stage' — сделка в колонке воронки (стадии), робот не нужен
+   *   'field' — пользовательское поле «Ожидаем город = Да»
    */
   'flows' => [
 
@@ -63,12 +66,17 @@ return [
       'enabled' => true,
       'description' => 'Save client city and move deal to next stage',
 
-      'waiting_field' => 'UF_CRM_WAITING_CITY',
-      'target_field' => 'UF_CRM_CITY',
-      'after_stage' => 'NEW',
+      // Колонка воронки «Ожидаем город» = стадия сделки (STAGE_ID).
+      'waiting_mode' => 'stage',
+      'waiting_stage' => 'NEW',
 
-      'waiting_yes' => '1',
-      'waiting_no' => '0',
+      'target_field' => 'UF_CRM_1786528780569',
+      'after_stage' => 'PREPARATION',
+
+      // Только для waiting_mode = 'field':
+      // 'waiting_field' => 'UF_CRM_WAITING_CITY',
+      // 'waiting_yes' => '1',
+      // 'waiting_no' => '0',
 
       // Optional per-flow funnel filter (overrides bitrix.category_id when set).
       'category_id' => null,

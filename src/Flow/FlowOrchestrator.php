@@ -44,7 +44,7 @@ final class FlowOrchestrator
       $match = $this->dealService->findWaitingDeal($contactId, $flows);
 
       if ($match->status === 'none') {
-        $this->logger->info('Ignored because waiting field is not yes', [
+        $this->logger->info('Ignored because deal is not in waiting stage/field', [
           'contact_id' => $contactId,
         ]);
         continue;

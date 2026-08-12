@@ -51,20 +51,26 @@ final class DealService
     $globalCategoryId = $this->config->get('bitrix.category_id');
 
     foreach ($flows as $flowName => $flow) {
-      $waitingField = (string) $flow['waiting_field'];
-      $waitingYes = (string) $flow['waiting_yes'];
+      $waitingMode = (string) ($flow['waiting_mode'] ?? 'field');
       $categoryId = $flow['category_id'] ?? $globalCategoryId;
 
       $filter = [
         '=contactId' => $contactId,
-        '=' . $waitingField => $waitingYes,
       ];
+
+      $select = ['id', 'stageId', 'categoryId', 'contactId'];
+
+      if ($waitingMode === 'stage') {
+        $filter['=stageId'] = (string) $flow['waiting_stage'];
+      } else {
+        $waitingField = (string) $flow['waiting_field'];
+        $filter['=' . $waitingField] = (string) $flow['waiting_yes'];
+        $select[] = $waitingField;
+      }
 
       if ($categoryId !== null && $categoryId !== '') {
         $filter['=categoryId'] = (int) $categoryId;
       }
-
-      $select = ['id', 'stageId', 'categoryId', $waitingField, 'contactId'];
 
       $result = $this->bitrix->call('crm.item.list', [
         'entityTypeId' => $entityTypeId,
@@ -109,9 +115,13 @@ final class DealService
     $entityTypeId = (int) $this->config->get('bitrix.deal_entity_type_id', 2);
 
     $payload = array_merge($fields, [
-      (string) $flow['waiting_field'] => (string) $flow['waiting_no'],
       'stageId' => (string) $flow['after_stage'],
     ]);
+
+    $waitingMode = (string) ($flow['waiting_mode'] ?? 'field');
+    if ($waitingMode === 'field') {
+      $payload[(string) $flow['waiting_field']] = (string) $flow['waiting_no'];
+    }
 
     $this->bitrix->call('crm.item.update', [
       'entityTypeId' => $entityTypeId,
