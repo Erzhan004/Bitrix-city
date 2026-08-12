@@ -18,7 +18,10 @@ return [
     'api_key' => '392140e389874e4ebe688ea3d99b3f3c',
 
     // Query-string secret for public endpoint: webhook.php?key=...
-    'webhook_secret' => 'CHANGE_ME',
+    'webhook_secret' => 'bC7kM9pQ2xR5vN8wL4jT6hF',
+
+    // Full public URL (for Wazzup registration).
+    'public_webhook_url' => 'https://bitrix-city.designportal.kz/public/webhook.php',
 
     // null = accept all channels. Example: ['b96a353b-9999-4cac-8413-ba99999f981']
     'allowed_channel_ids' => null,
