@@ -46,7 +46,7 @@ return [
 
     'statuses' => [
       'unprocessed' => 'NEW',        // Не обработан
-      'processed' => 'PROCESSED',    // Обработан — замените на ваш STATUS_ID
+      'processed' => 'CONVERTED',    // Качественный лид
     ],
   ],
 
@@ -95,7 +95,7 @@ return [
       'cities' => [
         'павлодар',
         'pavlodar',
-        '7',
+        '3',
       ],
       'category_id' => 4,       // воронка «Павлодар»
       'stage_id' => 'C4:NEW',   // стадия «Новая»
