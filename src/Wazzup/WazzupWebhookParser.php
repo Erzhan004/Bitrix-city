@@ -78,6 +78,7 @@ final class WazzupWebhookParser
         contactPhone: $phone,
         isDeleted: (bool) ($item['isDeleted'] ?? false),
         isEdited: (bool) ($item['isEdited'] ?? false),
+        dateTime: isset($item['dateTime']) ? (string) $item['dateTime'] : null,
       );
     }
 

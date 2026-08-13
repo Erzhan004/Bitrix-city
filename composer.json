@@ -1,6 +1,6 @@
 {
     "name": "chat-city/wazzup-bitrix",
-    "description": "Wazzup webhook to Bitrix24 deal city/stage integration",
+    "description": "Wazzup webhook → Bitrix24 leads with branch deal routing",
     "type": "project",
     "license": "proprietary",
     "require": {

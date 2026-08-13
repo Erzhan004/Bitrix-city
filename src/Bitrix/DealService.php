@@ -5,8 +5,7 @@ declare(strict_types=1);
 namespace App\Bitrix;
 
 use App\Config;
-use App\Dto\DealMatch;
-use App\PhoneNormalizer;
+use App\Dto\Branch;
 use Psr\Log\LoggerInterface;
 
 final class DealService
@@ -14,280 +13,101 @@ final class DealService
   public function __construct(
     private readonly Config $config,
     private readonly BitrixClient $bitrix,
-    private readonly PhoneNormalizer $phoneNormalizer,
     private readonly LoggerInterface $logger,
   ) {
   }
 
-  /** @return list<int> */
-  public function findContactIdsByPhone(string $normalizedPhone): array
+  public function findDealIdByLeadId(int $leadId): ?int
   {
-    $variants = $this->phoneNormalizer->lookupVariants($normalizedPhone);
-    $method = (string) $this->config->get('bitrix.contact_lookup.method', 'crm.duplicate.findbycomm');
+    $entityTypeId = (int) $this->config->get('bitrix.entity_type.deal', 2);
 
-    $result = $this->bitrix->call($method, [
-      'entity_type' => (string) $this->config->get('bitrix.contact_lookup.entity_type', 'CONTACT'),
-      'type' => (string) $this->config->get('bitrix.contact_lookup.type', 'PHONE'),
-      'values' => $variants,
-    ]);
-
-    $contacts = $result['CONTACT'] ?? [];
-
-    if (!is_array($contacts)) {
-      return [];
-    }
-
-    return array_values(array_unique(array_map('intval', $contacts)));
-  }
-
-  /**
-   * Find exactly one active deal waiting for a configured flow.
-   *
-   * @param array<string, array<string, mixed>> $flows
-   */
-  public function findWaitingDeal(int $contactId, array $flows): DealMatch
-  {
-    $entityTypeId = (int) $this->config->get('bitrix.deal_entity_type_id', 2);
-    $globalCategoryId = $this->config->get('bitrix.category_id');
-
-    foreach ($flows as $flowName => $flow) {
-      $waitingMode = (string) ($flow['waiting_mode'] ?? 'field');
-      $categoryId = $flow['category_id'] ?? $globalCategoryId;
-
-      $filter = [
-        '=contactId' => $contactId,
-      ];
-
-      $select = ['id', 'stageId', 'categoryId', 'contactId'];
-
-      if ($waitingMode === 'stage') {
-        $filter['=stageId'] = (string) $flow['waiting_stage'];
-      } else {
-        $waitingField = (string) $flow['waiting_field'];
-        $filter['=' . $waitingField] = (string) $flow['waiting_yes'];
-        $select[] = $waitingField;
-      }
-
-      if ($categoryId !== null && $categoryId !== '') {
-        $filter['=categoryId'] = (int) $categoryId;
-      }
-
-      $result = $this->bitrix->call('crm.item.list', [
-        'entityTypeId' => $entityTypeId,
-        'filter' => $filter,
-        'select' => $select,
-        'order' => ['id' => 'DESC'],
-      ]);
-
-      $items = $this->extractListItems($result);
-
-      if ($items === []) {
-        continue;
-      }
-
-      $activeDeals = $this->filterActiveDeals($items);
-
-      if ($activeDeals === []) {
-        continue;
-      }
-
-      $dealIds = $this->extractDealIds($activeDeals);
-
-      if ($dealIds === []) {
-        continue;
-      }
-
-      if (count($dealIds) === 1) {
-        $this->logger->info('Deal found', [
-          'deal_id' => $dealIds[0],
-          'flow' => $flowName,
-          'contact_id' => $contactId,
-        ]);
-
-        return DealMatch::single($dealIds[0], (string) $flowName);
-      }
-
-      if (count($dealIds) > 1) {
-        return DealMatch::multiple($dealIds, (string) $flowName);
-      }
-    }
-
-    return DealMatch::none();
-  }
-
-  /**
-   * @param array<string, mixed> $flow
-   * @param array<string, mixed> $fields
-   */
-  public function updateDeal(int $dealId, array $flow, array $fields): void
-  {
-    $entityTypeId = (int) $this->config->get('bitrix.deal_entity_type_id', 2);
-
-    $payload = array_merge($fields, [
-      'stageId' => (string) $flow['after_stage'],
-    ]);
-
-    $waitingMode = (string) ($flow['waiting_mode'] ?? 'field');
-    if ($waitingMode === 'field') {
-      $payload[(string) $flow['waiting_field']] = (string) $flow['waiting_no'];
-    }
-
-    $this->bitrix->call('crm.item.update', [
+    $result = $this->bitrix->call('crm.item.list', [
       'entityTypeId' => $entityTypeId,
-      'id' => $dealId,
-      'useOriginalUfNames' => 'Y',
-      'fields' => $payload,
+      'filter' => [
+        '=leadId' => $leadId,
+      ],
+      'select' => ['id', 'leadId', 'categoryId', 'stageId', 'title'],
+      'order' => ['id' => 'DESC'],
     ]);
-  }
 
-  /** @param array<string, mixed> $result */
-  private function extractListItems(array $result): array
-  {
     $items = $result['items'] ?? [];
-
-    if (!is_array($items)) {
-      return [];
+    if (!is_array($items) || $items === []) {
+      return null;
     }
 
-    $normalized = [];
-
     foreach ($items as $item) {
-      if (!is_array($item) || $this->extractItemId($item) === null) {
+      if (!is_array($item)) {
         continue;
       }
 
-      $normalized[] = $item;
-    }
-
-    return $normalized;
-  }
-
-  /** @param list<array<string, mixed>> $items */
-  private function extractDealIds(array $items): array
-  {
-    $ids = [];
-
-    foreach ($items as $item) {
-      $id = $this->extractItemId($item);
-
-      if ($id !== null && $id > 0) {
-        $ids[] = $id;
-      }
-    }
-
-    return array_values(array_unique($ids));
-  }
-
-  /** @param array<string, mixed> $item */
-  private function extractItemId(array $item): ?int
-  {
-    foreach (['id', 'ID', 'Id'] as $key) {
-      if (isset($item[$key]) && (int) $item[$key] > 0) {
-        return (int) $item[$key];
+      $id = (int) ($item['id'] ?? 0);
+      if ($id > 0) {
+        return $id;
       }
     }
 
     return null;
   }
 
-  /** @param list<array<string, mixed>> $items */
-  private function filterActiveDeals(array $items): array
-  {
-    $semanticsFilter = $this->config->get('bitrix.active_deal_semantics', ['process']);
+  public function createForBranch(
+    Branch $branch,
+    int $contactId,
+    int $leadId,
+    string $phone,
+    string $city,
+  ): int {
+    $entityTypeId = (int) $this->config->get('bitrix.entity_type.deal', 2);
+    $title = $this->buildTitle($branch, $phone, $city, $leadId);
 
-    if (!is_array($semanticsFilter) || $semanticsFilter === []) {
-      return $items;
+    $fields = [
+      'title' => $title,
+      'categoryId' => $branch->categoryId,
+      'stageId' => $branch->stageId,
+      'contactId' => $contactId,
+      'leadId' => $leadId,
+      'opened' => 'Y',
+    ];
+
+    if ($branch->assignedById !== null) {
+      $fields['assignedById'] = $branch->assignedById;
     }
 
-    $stageSemantics = $this->loadStageSemanticsMap();
-    $active = [];
+    $result = $this->bitrix->call('crm.item.add', [
+      'entityTypeId' => $entityTypeId,
+      'fields' => $fields,
+    ]);
 
-    foreach ($items as $item) {
-      if (!is_array($item) || $this->extractItemId($item) === null) {
-        continue;
-      }
+    $item = $result['item'] ?? [];
+    $dealId = (int) ($item['id'] ?? 0);
 
-      $stageId = (string) ($item['stageId'] ?? '');
-      $semantics = $stageSemantics[$stageId] ?? 'process';
-
-      if (in_array($semantics, $semanticsFilter, true)) {
-        $active[] = $item;
-      }
+    if ($dealId <= 0) {
+      throw new \RuntimeException('Deal create returned empty id.');
     }
 
-    return $active;
+    $this->logger->info('DEAL_CREATED', [
+      'dealId' => $dealId,
+      'leadId' => $leadId,
+      'contactId' => $contactId,
+      'branch' => $branch->key,
+      'categoryId' => $branch->categoryId,
+      'stageId' => $branch->stageId,
+    ]);
+
+    return $dealId;
   }
 
-  /** @return array<string, string> stageId => semantics */
-  private function loadStageSemanticsMap(): array
+  private function buildTitle(Branch $branch, string $phone, string $city, int $leadId): string
   {
-    static $cache = null;
+    $template = (string) $this->config->get(
+      'deal.title_template',
+      'Заявка WhatsApp — {branch} — +{phone}'
+    );
 
-    if (is_array($cache)) {
-      return $cache;
-    }
-
-    $cache = [];
-
-    $entityIds = ['DEAL_STAGE'];
-
-    try {
-      $categoriesResult = $this->bitrix->call('crm.category.list', [
-        'entityTypeId' => (int) $this->config->get('bitrix.deal_entity_type_id', 2),
-      ]);
-
-      $categories = $categoriesResult['categories'] ?? $categoriesResult;
-
-      if (is_array($categories)) {
-        foreach ($categories as $category) {
-          if (is_array($category) && isset($category['id'])) {
-            $entityIds[] = 'DEAL_STAGE_' . $category['id'];
-          }
-        }
-      }
-    } catch (\Throwable $e) {
-      $this->logger->warning('Cannot load deal categories for stage semantics', [
-        'message' => $e->getMessage(),
-      ]);
-    }
-
-    foreach (array_unique($entityIds) as $entityId) {
-      try {
-        $statuses = $this->bitrix->call('crm.status.list', [
-          'filter' => ['ENTITY_ID' => $entityId],
-          'select' => ['STATUS_ID', 'EXTRA'],
-        ]);
-      } catch (\Throwable $e) {
-        $this->logger->warning('Cannot load deal stage semantics', [
-          'entity_id' => $entityId,
-          'message' => $e->getMessage(),
-        ]);
-        continue;
-      }
-
-      $rows = is_array($statuses) ? $statuses : [];
-
-      foreach ($rows as $row) {
-        if (!is_array($row)) {
-          continue;
-        }
-
-        $statusId = (string) ($row['STATUS_ID'] ?? '');
-        if ($statusId === '') {
-          continue;
-        }
-
-        $extra = $row['EXTRA'] ?? [];
-        $semantics = 'process';
-
-        if (is_array($extra) && isset($extra['SEMANTICS'])) {
-          $semantics = (string) $extra['SEMANTICS'];
-        }
-
-        $cache[$statusId] = $semantics;
-      }
-    }
-
-    return $cache;
+    return strtr($template, [
+      '{branch}' => $branch->name,
+      '{phone}' => $phone,
+      '{city}' => $city,
+      '{lead_id}' => (string) $leadId,
+    ]);
   }
 }

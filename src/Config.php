@@ -26,6 +26,7 @@ final class Config
     }
 
     $this->data = $loaded;
+    $this->validate();
   }
 
   public function get(string $key, mixed $default = null): mixed
@@ -61,60 +62,41 @@ final class Config
   }
 
   /** @return array<string, array<string, mixed>> */
-  public function enabledFlows(): array
+  public function branches(): array
   {
-    $flows = $this->get('flows', []);
+    $branches = $this->get('branches', []);
 
-    if (!is_array($flows)) {
-      return [];
-    }
-
-    $enabled = [];
-
-    foreach ($flows as $name => $flow) {
-      if (!is_array($flow)) {
-        continue;
-      }
-
-      if (($flow['enabled'] ?? true) !== true) {
-        continue;
-      }
-
-      $this->validateFlow((string) $name, $flow);
-      $enabled[(string) $name] = $flow;
-    }
-
-    return $enabled;
+    return is_array($branches) ? $branches : [];
   }
 
-  /** @param array<string, mixed> $flow */
-  private function validateFlow(string $name, array $flow): void
+  private function validate(): void
   {
-    $mode = (string) ($flow['waiting_mode'] ?? 'field');
+    $this->require('bitrix.webhook');
+    $this->require('wazzup.webhook_secret');
+    $this->require('lead.city_field');
+    $this->require('lead.statuses.unprocessed');
+    $this->require('lead.statuses.processed');
 
-    if (!in_array($mode, ['field', 'stage'], true)) {
-      throw new RuntimeException(sprintf('Flow "%s" has invalid waiting_mode "%s".', $name, $mode));
-    }
-
-    if (!isset($flow['target_field']) || $flow['target_field'] === '') {
-      throw new RuntimeException(sprintf('Flow "%s" is missing "target_field".', $name));
-    }
-
-    if (!isset($flow['after_stage']) || $flow['after_stage'] === '') {
-      throw new RuntimeException(sprintf('Flow "%s" is missing "after_stage".', $name));
-    }
-
-    if ($mode === 'stage') {
-      if (!isset($flow['waiting_stage']) || $flow['waiting_stage'] === '') {
-        throw new RuntimeException(sprintf('Flow "%s" is missing "waiting_stage".', $name));
+    foreach ($this->branches() as $key => $branch) {
+      if (!is_array($branch)) {
+        throw new RuntimeException('Invalid branch config: ' . $key);
       }
 
-      return;
-    }
+      foreach (['name', 'cities', 'category_id', 'stage_id'] as $field) {
+        if (!array_key_exists($field, $branch) || $branch[$field] === '' || $branch[$field] === null) {
+          throw new RuntimeException(sprintf('Branch "%s" is missing "%s".', $key, $field));
+        }
+      }
 
-    foreach (['waiting_field', 'waiting_yes', 'waiting_no'] as $field) {
-      if (!isset($flow[$field]) || $flow[$field] === '') {
-        throw new RuntimeException(sprintf('Flow "%s" is missing "%s".', $name, $field));
+      if (!is_array($branch['cities']) || $branch['cities'] === []) {
+        throw new RuntimeException(sprintf('Branch "%s" must have non-empty cities list.', $key));
+      }
+
+      $stageId = (string) $branch['stage_id'];
+      $categoryId = (int) $branch['category_id'];
+
+      if ($categoryId > 0 && !str_starts_with($stageId, 'C' . $categoryId . ':')) {
+        // Soft warning only in logs later; still valid for custom stage codes.
       }
     }
   }

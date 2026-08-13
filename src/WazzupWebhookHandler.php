@@ -5,10 +5,12 @@ declare(strict_types=1);
 namespace App;
 
 use App\Bitrix\BitrixClient;
+use App\Bitrix\ContactService;
 use App\Bitrix\DealService;
+use App\Bitrix\LeadService;
+use App\Branch\BranchResolver;
 use App\Exception\BitrixApiException;
 use App\Flow\FlowOrchestrator;
-use App\Flow\ValueProcessorRegistry;
 use App\Http\JsonResponse;
 use App\Http\WebhookSecurity;
 use App\Wazzup\WazzupWebhookParser;
@@ -69,7 +71,7 @@ final class WazzupWebhookHandler
         return;
       }
 
-      $this->logger->info('Webhook received', [
+      $this->logger->info('WAZZUP_WEBHOOK_RECEIVED', [
         'keys' => array_keys($payload),
       ]);
 
@@ -93,11 +95,11 @@ final class WazzupWebhookHandler
         try {
           $result = $this->orchestrator->processMessage($message);
 
-          if ($result === 'deal_updated') {
+          if ($result === 'deal_created') {
             $processedCount++;
           }
         } catch (BitrixApiException $e) {
-          $this->logger->error('Bitrix API error during webhook processing', [
+          $this->logger->error('BITRIX_API_ERROR', [
             'messageId' => $message->messageId,
             'error' => $e->bitrixError,
           ]);
@@ -124,15 +126,15 @@ final class WazzupWebhookHandler
     $logger = LoggerFactory::create($config);
     $phoneNormalizer = new PhoneNormalizer();
     $bitrix = new BitrixClient($config, $logger);
-    $dealService = new DealService($config, $bitrix, $phoneNormalizer, $logger);
 
     return new self(
       new WebhookSecurity($config),
       new WazzupWebhookParser($config, $phoneNormalizer),
       new FlowOrchestrator(
-        $config,
-        $dealService,
-        new ValueProcessorRegistry(),
+        new LeadService($config, $bitrix, $phoneNormalizer, $logger),
+        new ContactService($config, $bitrix, $phoneNormalizer, $logger),
+        new DealService($config, $bitrix, $logger),
+        new BranchResolver($config),
         $logger
       ),
       $logger,

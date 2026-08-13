@@ -4,102 +4,152 @@ declare(strict_types=1);
 
 namespace App\Flow;
 
+use App\Bitrix\ContactService;
 use App\Bitrix\DealService;
-use App\Config;
+use App\Bitrix\LeadService;
+use App\Branch\BranchResolver;
 use App\Dto\IncomingMessage;
 use Psr\Log\LoggerInterface;
 
+/**
+ * While lead is "Не обработан": ignore any message that is not a known branch city.
+ * Only a matched city creates a deal and marks the lead processed.
+ * No SQLite / no "Ожидаем город" field needed.
+ */
 final class FlowOrchestrator
 {
   public function __construct(
-    private readonly Config $config,
+    private readonly LeadService $leadService,
+    private readonly ContactService $contactService,
     private readonly DealService $dealService,
-    private readonly ValueProcessorRegistry $processors,
+    private readonly BranchResolver $branchResolver,
     private readonly LoggerInterface $logger,
   ) {
   }
 
   public function processMessage(IncomingMessage $message): string
   {
-    $this->logger->info('Processing incoming message', [
+    $this->logger->info('INBOUND_MESSAGE_RECEIVED', [
       'messageId' => $message->messageId,
       'phone' => $message->contactPhone,
-      'message_type' => $message->type,
+      'type' => $message->type,
       'chatType' => $message->chatType,
+      'text' => $message->text,
     ]);
 
-    $contactIds = $this->dealService->findContactIdsByPhone((string) $message->contactPhone);
+    $phone = (string) $message->contactPhone;
+    $this->logger->info('PHONE_NORMALIZED', ['phone' => $phone]);
 
-    if ($contactIds === []) {
-      $this->logger->info('Contact not found', ['phone' => $message->contactPhone]);
+    $match = $this->leadService->findUnprocessedLeadByPhone($phone);
 
-      return 'contact_not_found';
-    }
-
-    $this->logger->info('Contact found', ['contact_ids' => $contactIds]);
-
-    $flows = $this->config->enabledFlows();
-
-    foreach ($contactIds as $contactId) {
-      $match = $this->dealService->findWaitingDeal($contactId, $flows);
-
-      if ($match->status === 'none') {
-        $this->logger->info('Ignored because deal is not in waiting stage/field', [
-          'contact_id' => $contactId,
-        ]);
-        continue;
-      }
-
-      if ($match->status === 'multiple') {
-        $this->logger->error('MULTIPLE_WAITING_DEALS', [
-          'contact_id' => $contactId,
-          'flow' => $match->flowName,
-          'deal_ids' => $match->dealIds,
-        ]);
-
-        return 'multiple_waiting_deals';
-      }
-
-      $flowName = (string) $match->flowName;
-      $flow = $flows[$flowName] ?? null;
-
-      if (!is_array($flow)) {
-        return 'flow_not_configured';
-      }
-
-      $processorName = (string) ($flow['processor'] ?? 'text');
-      $options = is_array($flow['processor_options'] ?? null) ? $flow['processor_options'] : [];
-      $value = $this->processors->get($processorName)->process($message->text, $options);
-
-      if ($value === null || $value === '') {
-        $this->logger->info('Value rejected by processor', [
-          'flow' => $flowName,
+    if ($match->status === 'none') {
+      if ($this->hasProcessedLead($phone)) {
+        $this->logger->info('LEAD_ALREADY_PROCESSED', [
+          'phone' => $phone,
           'messageId' => $message->messageId,
         ]);
 
-        return 'value_rejected';
+        return 'lead_already_processed';
       }
 
-      $this->logger->info('Value received', [
-        'flow' => $flowName,
-        'value' => $value,
+      $this->logger->info('UNPROCESSED_LEAD_NOT_FOUND', [
+        'phone' => $phone,
+        'messageId' => $message->messageId,
       ]);
 
-      $this->dealService->updateDeal(
-        (int) $match->dealId,
-        $flow,
-        [(string) $flow['target_field'] => $value]
-      );
-
-      $this->logger->info('Deal updated', [
-        'deal_id' => $match->dealId,
-        'flow' => $flowName,
-        'stage' => $flow['after_stage'],
-      ]);
-
-      return 'deal_updated';
+      return 'unprocessed_lead_not_found';
     }
 
-    return 'ignored';
+    if ($match->status === 'multiple') {
+      $this->logger->error('MULTIPLE_UNPROCESSED_LEADS', [
+        'phone' => $phone,
+        'lead_ids' => $match->leadIds,
+        'messageId' => $message->messageId,
+      ]);
+
+      return 'multiple_unprocessed_leads';
+    }
+
+    $leadId = (int) $match->leadId;
+    $lead = $match->lead ?? [];
+
+    $this->logger->info('UNPROCESSED_LEAD_FOUND', [
+      'leadId' => $leadId,
+      'phone' => $phone,
+      'messageId' => $message->messageId,
+    ]);
+
+    $cityRaw = trim($message->text);
+    $branch = $this->branchResolver->resolve($cityRaw);
+
+    // "Здравствуйте", "Караганда", etc. — keep waiting, do not save.
+    if ($branch === null) {
+      $this->logger->info('WAITING_FOR_CITY_IGNORED', [
+        'leadId' => $leadId,
+        'messageId' => $message->messageId,
+        'text' => $cityRaw,
+      ]);
+
+      return 'waiting_for_city';
+    }
+
+    $warning = $this->branchResolver->validateBranchStage($branch);
+    if ($warning !== null) {
+      $this->logger->warning('BRANCH_STAGE_CATEGORY_MISMATCH', [
+        'branch' => $branch->key,
+        'warning' => $warning,
+      ]);
+    }
+
+    $this->logger->info('BRANCH_RESOLVED_' . strtoupper($branch->key), [
+      'leadId' => $leadId,
+      'branch' => $branch->key,
+      'city' => $cityRaw,
+      'categoryId' => $branch->categoryId,
+      'stageId' => $branch->stageId,
+    ]);
+
+    $this->leadService->saveCity($leadId, $cityRaw);
+
+    $existingDealId = $this->dealService->findDealIdByLeadId($leadId);
+    if ($existingDealId !== null) {
+      $this->logger->info('DEAL_ALREADY_EXISTS', [
+        'dealId' => $existingDealId,
+        'leadId' => $leadId,
+      ]);
+
+      $this->leadService->markProcessed($leadId);
+
+      return 'deal_created';
+    }
+
+    $contactId = $this->contactService->findOrCreateFromLead($phone, $lead);
+
+    $this->dealService->createForBranch(
+      $branch,
+      $contactId,
+      $leadId,
+      $phone,
+      $cityRaw
+    );
+
+    // Only after successful deal creation:
+    $this->leadService->markProcessed($leadId);
+
+    return 'deal_created';
+  }
+
+  private function hasProcessedLead(string $phone): bool
+  {
+    $leadIds = $this->leadService->findLeadIdsByPhone($phone);
+
+    foreach ($leadIds as $leadId) {
+      $lead = $this->leadService->getLead($leadId);
+      if (is_array($lead) && $this->leadService->isProcessed($lead)) {
+        return true;
+      }
+    }
+
+    return false;
   }
 }

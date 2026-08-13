@@ -18,6 +18,7 @@ final readonly class IncomingMessage
     public ?string $contactPhone,
     public bool $isDeleted,
     public bool $isEdited,
+    public ?string $dateTime = null,
   ) {
   }
 }
